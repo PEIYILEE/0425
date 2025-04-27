@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Arduino 控制斜線（平滑版）</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: black;
+        }
+
+        #connectButton {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            padding: 10px 20px;
+            font-size: 18px;
+            z-index: 10;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+            #connectButton:hover {
+                background: #45a049;
+            }
+    </style>
+</head>
+<body>
+    <button id="connectButton">🔌 連接 Arduino</button>
+    <canvas id="slopeCanvas"></canvas>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const canvas = document.getElementById('slopeCanvas');
+            const ctx = canvas.getContext('2d');
+            const connectButton = document.getElementById('connectButton');
+            resizeCanvas();
+
+            let x = 0;
+            let y_red = canvas.height / 4;
+            let y_green = canvas.height / 2;
+            let y_blue = canvas.height * 3 / 4;
+
+            let targetSlope = 0;    // 目標斜率
+            let currentSlope = 0;   // 目前斜率（會慢慢追上目標，平滑過渡）
+            let val0 = 0;           // 目前的電阻值
+
+            function resizeCanvas() {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            }
+
+            window.addEventListener('resize', resizeCanvas);
+
+            function mapResistanceToSlope(resistance) {
+                const center = 500; // 你的基準點
+                const diff = resistance - center;
+                const baseSlope = Math.abs(diff) / 300; // 調整這個數字控制敏感度
+                if (diff > 0) {
+                    return baseSlope;    // 左下到右上
+                } else if (diff < 0) {
+                    return -baseSlope;   // 右下到左上
+                } else {
+                    return 0;            // 正水平
+                }
+            }
+
+            function updateSlope(v0) {
+                val0 = v0;
+                targetSlope = mapResistanceToSlope(val0);
+            }
+
+            function draw() {
+                x += 1;
+
+                // 平滑過渡：讓 currentSlope 慢慢追向 targetSlope
+                currentSlope += (targetSlope - currentSlope) * 0.05;
+
+                y_red += currentSlope;
+                y_green = canvas.height / 2;
+                y_blue += currentSlope;
+
+                // 畫紅線
+                ctx.beginPath();
+                ctx.strokeStyle = 'red';
+                ctx.moveTo(x - 1, y_red - currentSlope);
+                ctx.lineTo(x, y_red);
+                ctx.stroke();
+
+                // 畫綠線（固定水平）
+                ctx.beginPath();
+                ctx.strokeStyle = 'green';
+                ctx.moveTo(x - 1, y_green);
+                ctx.lineTo(x, y_green);
+                ctx.stroke();
+
+                // 畫藍線
+                ctx.beginPath();
+                ctx.strokeStyle = 'blue';
+                ctx.moveTo(x - 1, y_blue - currentSlope);
+                ctx.lineTo(x, y_blue);
+                ctx.stroke();
+
+                // 更新右上角資訊
+                ctx.fillStyle = 'black';
+                ctx.fillRect(canvas.width - 220, 0, 220, 50);
+
+                ctx.fillStyle = 'white';
+                ctx.font = '20px Arial';
+                ctx.textAlign = 'right';
+                ctx.fillText(`val0: ${val0}`, canvas.width - 20, 40);
+
+                // 到達最右邊時重置
+                if (x > canvas.width) {
+                    x = 0;
+                    y_red = canvas.height / 4;
+                    y_green = canvas.height / 2;
+                    y_blue = canvas.height * 3 / 4;
+
+                    ctx.fillStyle = 'black';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                }
+
+                requestAnimationFrame(draw);
+            }
+
+            draw();
+
+            connectButton.addEventListener('click', async () => {
+                try {
+                    const port = await navigator.serial.requestPort();
+                    await port.open({ baudRate: 9600 });
+                    const reader = port.readable.getReader();
+                    console.log('已連接 Arduino，開始接收數據');
+
+                    async function readLoop() {
+                        while (true) {
+                            const { value, done } = await reader.read();
+                            if (done) {
+                                reader.releaseLock();
+                                break;
+                            }
+                            const text = new TextDecoder().decode(value);
+                            const cleanText = text.trim();
+                            if (cleanText) {
+                                const v0 = Number(cleanText);
+                                if (!isNaN(v0)) {
+                                    updateSlope(v0);
+                                }
+                            }
+                        }
+                    }
+                    readLoop();
+                } catch (error) {
+                    console.error('連接失敗', error);
+                    alert('連接失敗，請確認 Arduino 有接上');
+                }
+            });
+
+        });
+    </script>
+</body>
+</html>
